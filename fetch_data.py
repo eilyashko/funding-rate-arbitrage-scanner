@@ -3,7 +3,7 @@ import datetime
 import pandas as pd
 from config import CONFIG
 from exchange import init_exchange, get_all_trading_pairs, get_funding_rate, get_historical_funding_rates, get_ohlc
-from utils import df_to_file, display_progress
+from utils import df_to_file, display_progress, build_run_directory
 
 
 def fetch_and_save_data():
@@ -15,9 +15,12 @@ def fetch_and_save_data():
     and saves them to files.
     """
     print(f"- Fetching data started")
-    directory_data = f"{CONFIG['directory']}/{CONFIG['subdirectory']}/data"
+    base_dir = build_run_directory(CONFIG['directory'])
+    directory_data = f"{base_dir}/data"
     perp_exchanges = [init_exchange(exchange) for exchange in CONFIG['perpetual_exchanges']]
-    spot_exchanges = [init_exchange(exchange) for exchange in CONFIG['spot_exchanges']]
+    spot_exchanges = []
+    if CONFIG.get('get_spot_perp_opportunities'):
+        spot_exchanges = [init_exchange(exchange) for exchange in CONFIG['spot_exchanges']]
 
     # Saving perpetual data
     for exchange in perp_exchanges:
@@ -29,8 +32,10 @@ def fetch_and_save_data():
             continue
         print(f" {len(perp_trading_pairs)} perpetual trading pairs found")
 
-        # Get all funding rates
-        df_rates = get_funding_rates_for_pairs(exchange, perp_trading_pairs)
+        # Get current funding rates (optional)
+        df_rates = pd.DataFrame({'pair': []})
+        if CONFIG.get('fetch_current_rate', True):
+            df_rates = get_funding_rates_for_pairs(exchange, perp_trading_pairs)
 
         # Get historical funding rates
         hours = CONFIG['funding_historical_days'] * 24
@@ -40,7 +45,8 @@ def fetch_and_save_data():
         df_daily_amplitude = get_daily_amplitude(exchange, perp_trading_pairs)
 
         # Merge and save data to file
-        intersection_df = pd.merge(df_rates, df_historical_rates, on='pair', how='left')
+        base_df = df_rates if not df_rates.empty else pd.DataFrame({'pair': perp_trading_pairs})
+        intersection_df = pd.merge(base_df, df_historical_rates, on='pair', how='left')
         intersection_df = pd.merge(intersection_df, df_daily_amplitude, on='pair', how='left')
 
         df_to_file(intersection_df, directory_data, f"funding_rates_{exchange.id}")
@@ -95,11 +101,28 @@ def get_historical_funding_rates_for_pairs(exchange, trading_pairs, hours=24):
     """
     total_pairs = len(trading_pairs)
     data = []
+    now_ms = int(datetime.datetime.now().timestamp() * 1000)
     for index, pair in enumerate(trading_pairs):
         try:
-            historical_rates = get_historical_funding_rates(exchange, pair, hours)
-            if historical_rates:
-                data.append({'pair': pair, 'historical_rates': historical_rates})
+            events = get_historical_funding_rates(exchange, pair, hours)
+            if events:
+                # Full window (e.g., 30d) is whatever we requested
+                full_rates = [e['rate'] for e in events if 'rate' in e]
+
+                # Derive 7d and 3d windows by timestamp filtering (no extra API calls)
+                def rates_last_hours(window_hours):
+                    cutoff = now_ms - window_hours * 60 * 60 * 1000
+                    return [e['rate'] for e in events if e.get('timestamp') and e['timestamp'] >= cutoff]
+
+                rates_7d = rates_last_hours(7 * 24)
+                rates_3d = rates_last_hours(3 * 24)
+
+                data.append({
+                    'pair': pair,
+                    'historical_rates': full_rates,
+                    'historical_rates_7d': rates_7d,
+                    'historical_rates_3d': rates_3d,
+                })
         except Exception as e:
             print(f"Error fetching historical funding rate for {pair}: {e}")
             continue

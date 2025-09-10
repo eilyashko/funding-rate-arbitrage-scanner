@@ -2,6 +2,7 @@ import sys
 import os
 import pandas as pd
 from config import CONFIG
+import datetime
 
 
 def display_progress(index, total, info=""):
@@ -64,3 +65,28 @@ def file_to_df(directory, filename):
     except FileNotFoundError as e:
         print(f"Error: No file found with name {filename} in directory {directory}: \n {str(e)}")
     return df
+
+
+def build_run_directory(base_directory: str) -> str:
+    """
+    Build the base directory for the current run, using date subfolder if configured.
+    """
+    if CONFIG.get('use_date_subfolder', True):
+        date_str = CONFIG.get('date_subfolder')
+        if not date_str:
+            date_str = datetime.datetime.now().strftime(CONFIG.get('date_subfolder_format', '%Y%m%d'))
+        return f"{base_directory}/{date_str}"
+    return base_directory
+
+
+def build_base_run_directory(base_directory: str, subdirectory: str) -> str:
+    """
+    Build the base directory path for this run, optionally injecting a date subfolder
+    as configured in CONFIG.
+
+    The path schema is:
+    - If use_date_subfolder: {base_directory}/{date}/{subdirectory}
+    - Else: {base_directory}/{subdirectory}
+    """
+    base = build_run_directory(base_directory)
+    return f"{base}/{subdirectory}" if subdirectory else base

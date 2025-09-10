@@ -64,14 +64,26 @@ def get_historical_funding_rates(exchange, pair, hours=24):
         hours (int): Number of hours of historical data to fetch. Default is 24 hours.
 
     Returns:
-        list: List of historical funding rates.
+        list[dict]: Each dict has keys: 'timestamp' (ms) and 'rate' (float percent)
     """
     current_time_ms = int(datetime.datetime.now().timestamp() * 1000)
     hours_in_ms = hours * 60 * 60 * 1000
     since = current_time_ms - hours_in_ms
-    market_data = exchange.fetch_funding_rate_history(pair, since=since, limit=100)
-    historical_rates = [round(100 * rate['fundingRate'], 3) for rate in market_data]
-    return historical_rates
+    # Use larger limit to better cover hourly venues across longer windows
+    market_data = exchange.fetch_funding_rate_history(pair, since=since, limit=1000)
+    events = []
+    for item in market_data:
+        try:
+            rate = round(100 * item.get('fundingRate'), 3)
+            ts = item.get('timestamp')
+            if ts is None and 'datetime' in item:
+                ts = exchange.parse8601(item['datetime'])
+            if ts is None:
+                continue
+            events.append({'timestamp': int(ts), 'rate': rate})
+        except Exception:
+            continue
+    return events
 
 
 def get_ohlc(exchange, trading_pair, start_date_ms, end_date_ms, timeframe='1m', limit=1000):
